@@ -1,0 +1,12 @@
+# only what the video render needs goes to GitHub (no voices, no script, no renders)
+node_modules/
+out/
+audio/
+script/
+plan/
+build/
+PROGRESS.md
+tools_tx.py
+*.tmp.mp4
+*.wav
+*.mp3

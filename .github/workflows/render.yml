@@ -1,0 +1,80 @@
+# Render the "Cave" composition on 20 GitHub runners at once (CPU WebGL via SwiftShader), then join the parts.
+# Run: Actions -> render -> Run workflow (or: gh workflow run render.yml). "test" renders 30 frames of part 0 only.
+name: render
+on:
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Speed test: 30 frames of part 0 only"
+        type: boolean
+        default: false
+jobs:
+  chunk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    steps:
+      - name: skip other parts in test mode
+        if: ${{ inputs.test && matrix.part != 0 }}
+        run: echo "test mode - only part 0 runs"
+      - uses: actions/checkout@v4
+        if: ${{ !inputs.test || matrix.part == 0 }}
+      - uses: actions/setup-node@v4
+        if: ${{ !inputs.test || matrix.part == 0 }}
+        with:
+          node-version: 22
+          cache: npm
+      - name: system packages (fonts, Chrome deps)
+        if: ${{ !inputs.test || matrix.part == 0 }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-noto-color-emoji libnss3 libdbus-1-3 libatk1.0-0 libgbm-dev libxrandr2 libxkbcommon-dev libxfixes3 libxcomposite1 libxdamage1 libatk-bridge2.0-0 libpango-1.0-0 libcairo2 libcups2 || true
+          sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2 || true
+      - name: npm ci
+        if: ${{ !inputs.test || matrix.part == 0 }}
+        run: npm ci --no-audit --no-fund
+      - name: browser
+        if: ${{ !inputs.test || matrix.part == 0 }}
+        run: npx remotion browser ensure
+      - name: render part
+        if: ${{ !inputs.test || matrix.part == 0 }}
+        run: |
+          N=$(node -e "console.log(Math.ceil(require('./src/cave/timeline.json').duration*30))")
+          P=20; step=$(( (N + P - 1) / P )); a=$(( ${{ matrix.part }} * step )); b=$(( a + step - 1 ))
+          [ $b -ge $N ] && b=$(( N - 1 ))
+          if [ "${{ inputs.test }}" = "true" ]; then b=$(( a + 29 )); fi
+          echo "frames $a-$b of $N"
+          mkdir -p out
+          start=$(date +%s)
+          npx remotion render src/index.ts Cave out/part.mp4 --frames=$a-$b --gl=swangle --concurrency=2 --timeout=240000 --crf=18 --muted
+          end=$(date +%s); echo "rendered $(( b - a + 1 )) frames in $(( end - start )) s"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.test || matrix.part == 0 }}
+        with:
+          name: part-${{ matrix.part }}
+          path: out/part.mp4
+          retention-days: 7
+  join:
+    needs: chunk
+    if: ${{ !inputs.test }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: part-*
+          path: parts
+      - name: join parts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          : > list.txt
+          for i in $(seq 0 19); do echo "file 'parts/part-$i/part.mp4'" >> list.txt; done
+          ffmpeg -v error -f concat -safe 0 -i list.txt -c copy film_v.mp4
+          ls -la film_v.mp4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: film_v
+          path: film_v.mp4
+          retention-days: 7
